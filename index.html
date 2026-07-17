@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
+<meta name="theme-color" content="#04080d">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<title>JARVIS — WA License Ops</title>
+<style>
+  :root{
+    --cyan:#4fd8ff; --cyan-dim:#1a6f8a; --bg:#04080d; --panel:#0a141d;
+    --text:#c9e8f5; --dim:#5d8296; --warn:#ffb454; --bad:#ff6b6b; --good:#5dffa3;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{background:radial-gradient(ellipse at 50% 30%, #0a1622 0%, var(--bg) 70%);
+    color:var(--text);font-family:'SF Mono',Menlo,Consolas,monospace;
+    min-height:100vh;display:flex;flex-direction:column;align-items:center;overflow-x:hidden}
+  header{padding:18px 0 4px;text-align:center;letter-spacing:.35em;font-size:13px;color:var(--cyan)}
+  header small{display:block;letter-spacing:.15em;color:var(--dim);font-size:10px;margin-top:4px}
+
+  /* ---- Core ---- */
+  #coreWrap{position:relative;width:210px;height:210px;margin:22px 0 8px;cursor:pointer}
+  .ring{position:absolute;inset:0;border-radius:50%;border:1px solid var(--cyan-dim)}
+  .ring.r2{inset:16px;border-style:dashed;animation:spin 24s linear infinite}
+  .ring.r3{inset:34px;border-color:var(--cyan);opacity:.35;animation:spin 14s linear infinite reverse}
+  #core{position:absolute;inset:56px;border-radius:50%;
+    background:radial-gradient(circle,#bdf3ff 0%,var(--cyan) 35%,#0b3a4d 100%);
+    box-shadow:0 0 40px 6px rgba(79,216,255,.45);transition:box-shadow .3s}
+  body.listening #core{animation:pulse 1.1s ease-in-out infinite}
+  body.speaking #core{animation:pulse .45s ease-in-out infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 0 34px 4px rgba(79,216,255,.4)}50%{box-shadow:0 0 70px 18px rgba(79,216,255,.8)}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  #stateLabel{text-align:center;font-size:11px;letter-spacing:.25em;color:var(--dim);min-height:16px}
+  body.listening #stateLabel{color:var(--cyan)}
+
+  /* ---- Transcript ---- */
+  #log{width:min(680px,92vw);flex:1;margin:14px 0;display:flex;flex-direction:column;gap:8px;
+    max-height:38vh;overflow-y:auto;scrollbar-width:thin}
+  .msg{padding:9px 13px;border-radius:4px;font-size:13px;line-height:1.55;max-width:88%;white-space:pre-wrap}
+  .msg.you{align-self:flex-end;background:#12222e;border:1px solid #1d3a4c;color:#e8f6fc}
+  .msg.jarvis{align-self:flex-start;background:var(--panel);border-left:2px solid var(--cyan);color:var(--text)}
+  .msg.jarvis b{color:var(--cyan)}
+  .msg .warn{color:var(--warn)} .msg .bad{color:var(--bad)} .msg .good{color:var(--good)}
+
+  /* ---- Controls ---- */
+  #controls{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;padding-bottom:10px}
+  button{background:transparent;border:1px solid var(--cyan-dim);color:var(--cyan);
+    font-family:inherit;font-size:11px;letter-spacing:.15em;padding:10px 16px;border-radius:3px;cursor:pointer}
+  button:active{background:#123043}
+  #wakeBtn.on{border-color:var(--cyan);background:#0d2a3a;box-shadow:0 0 12px rgba(79,216,255,.3)}
+  #textRow{display:flex;gap:8px;width:min(680px,92vw);padding-bottom:22px}
+  #textIn{flex:1;background:var(--panel);border:1px solid var(--cyan-dim);color:var(--text);
+    font-family:inherit;font-size:13px;padding:11px 12px;border-radius:3px;outline:none}
+  #hint{font-size:10px;color:var(--dim);letter-spacing:.08em;text-align:center;padding:0 16px 14px;line-height:1.7}
+</style>
+</head>
+<body>
+<header>J A R V I S<small>WA BROKER LICENSE · OPERATIONS</small></header>
+
+<div id="coreWrap" title="Tap to talk">
+  <div class="ring"></div><div class="ring r2"></div><div class="ring r3"></div><div id="core"></div>
+</div>
+<div id="stateLabel">TAP THE CORE · OR SAY "HEY JARVIS"</div>
+
+<div id="log"></div>
+
+<div id="controls">
+  <button onclick="cmdStatus()">STATUS</button>
+  <button onclick="cmdQuiz()">QUIZ ME</button>
+  <button onclick="cmdTasks()">TASKS</button>
+  <button id="wakeBtn" onclick="toggleWake()">🎙 WAKE WORD: OFF</button>
+</div>
+<div id="textRow">
+  <input id="textIn" placeholder='type a command… "status" · "quiz me" · "add task …" · "log 2 hours"'>
+</div>
+<div id="hint">Tap the core, then speak — Mac and iPhone. Optional on Mac (Chrome): WAKE WORD on = hands-free "Hey Jarvis".<br>
+Voice + typed commands: status · quiz me · tasks · add task [x] · done [x] · log [n] hours · stop<br>
+<span id="syncStamp" style="color:var(--cyan-dim)"></span></div>
+
+<script src="jarvis-data.js"></script>
+<script>
+/* ============ DATA — fallback snapshot. Live state loads from jarvis-data.js (synced by Claude) ============ */
+const FALLBACK = {
+  examTarget:"week of Aug 24, 2026",
+  floor:12, weeklyNeed:13,
+  weekStart:"2026-07-13",
+  hoursThisWeek:1.7,
+  lastSession:"2026-07-14",
+  courseLeft:55,
+  tasks:[
+    "Log study hours Wed–Sun — recover the week",
+    "Continue Fundamentals Level 3",
+    "Create PrepAgent account (check email)",
+    "Register PSI student account",
+    "Verify PSI exam fee ($138 vs $210)"
+  ],
+  quiz:[
+    {q:"A fourplex residence is BEST classified as:",a:["Commercial property","Multifamily residential","Industrial property","Mixed-use property"],c:1,why:"1–4 units = residential (multifamily). 5+ units = commercial. This was on your miss list."},
+    {q:"Which is a PHYSICAL characteristic of land?",a:["Scarcity","Situs (area preference)","Indestructibility","Improvements"],c:2,why:"Physical: immobility, indestructibility, uniqueness. The others are economic characteristics."},
+    {q:"A tenant's cultivated crops that remain personal property even after sale of the land are called:",a:["Appurtenances","Emblements","Fixtures","Trade chattels"],c:1,why:"Emblements (fructus industriales) stay personal property; the tenant may re-enter to harvest."},
+    {q:"The MOST important test of whether an item is a fixture is:",a:["Cost of the item","Method of attachment","Intention of the person who attached it","Age of the item"],c:2,why:"Intention is the controlling test; method, adaptability, and agreement are supporting evidence."},
+    {q:"The highest and most complete form of ownership is:",a:["Fee simple determinable","Life estate","Fee simple absolute","Leasehold estate"],c:2,why:"Fee simple absolute — full bundle of rights, indefinite duration, freely transferable."},
+    {q:"A life estate measured by the life of someone OTHER than the holder is called:",a:["Remainder estate","Pur autre vie","Reversionary estate","Estate at will"],c:1,why:"Pur autre vie = 'for another's life.' The named third party's life is the measuring stick."},
+    {q:"Which form of co-ownership includes the right of survivorship?",a:["Tenancy in common","Joint tenancy","Tenancy in severalty","Ownership in trust"],c:1,why:"Joint tenancy: four unities (time, title, interest, possession) + survivorship. Tenancy in common has neither."},
+    {q:"Washington is a ______ state for marital ownership of property.",a:["Common law","Community property","Dower and curtesy","Elective share"],c:1,why:"WA is one of the community-property states — property acquired during marriage is presumed owned 50/50."},
+    {q:"Two investors own unequal shares of a property with NO survivorship rights. This is:",a:["Joint tenancy","Tenancy in common","Community property","Severalty"],c:1,why:"Tenancy in common allows unequal shares and passes by will — no survivorship."},
+    {q:"A warehouse used for product distribution is classified as:",a:["Commercial","Industrial","Rural","Special-purpose"],c:1,why:"Industrial = manufacturing, warehousing, storage, distribution, data centers. Watch this vs. commercial — it was a weak-spot category."},
+    {q:"The bundle of rights includes all of the following EXCEPT:",a:["Right of disposition","Right of exclusion","Right of taxation","Right of enjoyment"],c:2,why:"Taxation is a GOVERNMENT power, not an owner's right. Bundle: possession, control, exclusion, enjoyment, disposition."},
+    {q:"Ownership by one person alone is called tenancy in:",a:["Common","Severalty","Entirety","Partnership"],c:1,why:"Severalty — ownership is 'severed' from everyone else. One owner."}
+  ]
+};
+/* ================================================================================================ */
+let best = window.JARVIS_DATA || null;
+try{const s=JSON.parse(localStorage.getItem('jarvis-sync'));
+  if(s && s.synced && (!best || s.synced > best.synced)) best=s;}catch(e){}
+if(location.hash.indexOf('#sync=')===0){
+  try{const s=JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(location.hash.slice(6))))));
+    if(s && s.synced){localStorage.setItem('jarvis-sync',JSON.stringify(s));
+      if(!best || s.synced >= best.synced) best=s;}
+    history.replaceState(null,'',location.pathname+location.search);
+  }catch(e){}
+}
+const SYNCED = !!best;
+const DATA = best || FALLBACK;
+document.getElementById('syncStamp').textContent = SYNCED
+  ? "◈ SYNCED WITH CLAUDE — " + DATA.synced + (DATA.position ? " · " + DATA.position : "")
+  : "◈ OFFLINE SNAPSHOT — sync via jarvis-data.js or a sync link from Claude";
+
+const log=document.getElementById('log'), stateLabel=document.getElementById('stateLabel');
+let quizState=null, wakeOn=false, rec=null, wakeRec=null;
+
+function say(text,html){
+  const d=document.createElement('div');d.className='msg jarvis';d.innerHTML=html||text;log.appendChild(d);log.scrollTop=log.scrollHeight;
+  if('speechSynthesis'in window){speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(text.replace(/[·—]/g,','));
+    u.rate=1.04;u.pitch=0.85;
+    const v=speechSynthesis.getVoices().find(v=>/Daniel|UK.*Male|Google UK English Male/i.test(v.name));if(v)u.voice=v;
+    document.body.classList.add('speaking');u.onend=()=>document.body.classList.remove('speaking');
+    speechSynthesis.speak(u);}
+}
+function you(t){const d=document.createElement('div');d.className='msg you';d.textContent=t;log.appendChild(d);log.scrollTop=log.scrollHeight;}
+
+/* ---------- commands ---------- */
+function daysSince(iso){return Math.floor((Date.now()-new Date(iso+"T12:00:00"))/864e5);}
+function cmdStatus(){
+  const gap=daysSince(DATA.lastSession), deficit=Math.max(0,DATA.floor-DATA.hoursThisWeek).toFixed(1);
+  const pace = DATA.hoursThisWeek>=DATA.floor ? `<span class="good">${DATA.hoursThisWeek} hrs — floor met.</span>`
+    : `<span class="${DATA.hoursThisWeek<4?'bad':'warn'}">${DATA.hoursThisWeek} hrs of ${DATA.floor} — ${deficit} hrs to recover by Sunday.</span>`;
+  say(`Status brief. Hours this week: ${DATA.hoursThisWeek} of ${DATA.floor}. ${DATA.hoursThisWeek<DATA.floor?deficit+" hours to recover by Sunday.":"Floor met."} Last logged session: ${gap} day${gap==1?"":"s"} ago. Exam target ${DATA.examTarget} holds at ${DATA.weeklyNeed} hours per week. Top priority: ${DATA.tasks[0]}.`,
+  `<b>STATUS BRIEF</b>\nPace: ${pace}\nLast logged session: ${gap} day${gap==1?"":"s"} ago · ~${DATA.courseLeft} course hrs left\nExam target: <b>${DATA.examTarget}</b> — needs ${DATA.weeklyNeed} hrs/wk\nTop priority: ${DATA.tasks[0]}\n\nWhat are we doing, sir?`);
+}
+function cmdTasks(){
+  say(`Open items: ${DATA.tasks.slice(0,3).join(". Next: ")}.`,
+  `<b>OPEN TASKS</b>\n${DATA.tasks.map((t,i)=>(i+1)+". "+t).join("\n")}`);
+}
+function cmdQuiz(){
+  quizState={order:[...DATA.quiz.keys()].sort(()=>Math.random()-.5).slice(0,8),i:0,score:0,missed:[]};
+  say("Quiz mode. Eight questions from your covered chapters, weighted to your weak spots. Commit before you answer.","<b>QUIZ MODE</b> — 8 questions. Answer A, B, C, or D.");
+  askNext();
+}
+function askNext(){
+  if(quizState.i>=quizState.order.length){
+    const s=quizState.score,n=quizState.order.length;
+    let m=quizState.missed.length?`\nMissed concepts — add to your miss list:\n• ${quizState.missed.join("\n• ")}`:"\nNothing missed. Log it.";
+    say(`Quiz complete. ${s} of ${n}. ${s/n>=0.85?"Above the 85 percent readiness bar.":"Below the 85 percent readiness bar. The miss list is the syllabus."}`,
+    `<b>RESULT: ${s}/${n}</b> (${Math.round(s/n*100)}%) — readiness bar is 85%${m}`);
+    quizState=null;return;
+  }
+  const q=DATA.quiz[quizState.order[quizState.i]];
+  say(`Question ${quizState.i+1}. ${q.q} A: ${q.a[0]}. B: ${q.a[1]}. C: ${q.a[2]}. D: ${q.a[3]}.`,
+  `<b>Q${quizState.i+1}.</b> ${q.q}\nA) ${q.a[0]}\nB) ${q.a[1]}\nC) ${q.a[2]}\nD) ${q.a[3]}`);
+}
+function answerQuiz(letter){
+  const q=DATA.quiz[quizState.order[quizState.i]], pick="ABCD".indexOf(letter);
+  if(pick===q.c){quizState.score++;say(`Correct. ${q.why}`,`<span class="good">✔ Correct.</span> ${q.why}`);}
+  else{quizState.missed.push(q.q);say(`Incorrect. The answer is ${"ABCD"[q.c]}: ${q.a[q.c]}. ${q.why}`,`<span class="bad">✘ ${letter} is wrong.</span> Answer: <b>${"ABCD"[q.c]}) ${q.a[q.c]}</b>. ${q.why}`);}
+  quizState.i++;setTimeout(askNext,2600);
+}
+
+/* ---------- parser ---------- */
+function handle(raw){
+  const t=raw.trim(); if(!t)return; you(t);
+  const s=t.toLowerCase().replace(/^(hey |ok |okay )?jarvis[,:]?\s*/,"");
+  if(quizState && /^[abcd]\b/.test(s)){answerQuiz(s[0].toUpperCase());return;}
+  if(quizState && /^(stop|quit|end|never mind)/.test(s)){quizState=null;say("Quiz ended.","Quiz ended.");return;}
+  if(/status|brief|where (are|am)|check.?in|pace/.test(s)) return cmdStatus();
+  if(/quiz|drill|test me/.test(s)) return cmdQuiz();
+  if(/^(tasks|list|what.?s (on|next)|to.?do)/.test(s)) return cmdTasks();
+  const add=s.match(/^(add task|add|remind me to|note)\s+(.+)/);
+  if(add){DATA.tasks.push(add[2]);persist();say(`Noted: ${add[2]}. Tell me in chat so it lands in TASKS dot MD.`,`Added: <b>${add[2]}</b>\n<span class="warn">Local only — tell Jarvis in a Claude chat to write it into TASKS.md.</span>`);return;}
+  const done=s.match(/^(done|complete|finished)\s+(.+)/);
+  if(done){const i=DATA.tasks.findIndex(x=>x.toLowerCase().includes(done[2]));
+    if(i>-1){say(`Cleared: ${DATA.tasks[i]}.`,`Cleared: <s>${DATA.tasks[i]}</s>`);DATA.tasks.splice(i,1);persist();}
+    else say("No matching task.","No matching task."); return;}
+  const hrs=s.match(/log\s+([\d.]+)\s*(hour|hr)/);
+  if(hrs){DATA.hoursThisWeek=+(DATA.hoursThisWeek+parseFloat(hrs[1])).toFixed(1);DATA.lastSession=new Date().toISOString().slice(0,10);persist();
+    say(`Logged ${hrs[1]} hours. Week total: ${DATA.hoursThisWeek}. Log the detail in a Claude chat so PROGRESS dot MD stays the source of truth.`,
+    `Logged <b>${hrs[1]} hrs</b> → week total ${DATA.hoursThisWeek}/${DATA.floor}\n<span class="warn">Log the session detail with Jarvis in chat → PROGRESS.md.</span>`);return;}
+  if(/hello|you there|good (morning|evening)/.test(s)){say("At your service, sir. Status, quiz, or tasks.","At your service, sir. <b>status</b> · <b>quiz</b> · <b>tasks</b>");return;}
+  say("Didn't catch that. Try: status, quiz me, tasks, add task, or log hours.","Commands: <b>status</b> · <b>quiz me</b> · <b>tasks</b> · <b>add task …</b> · <b>done …</b> · <b>log 2 hours</b>");
+}
+function persist(){try{localStorage.setItem('jarvis',JSON.stringify({d:new Date().toISOString().slice(0,10),h:DATA.hoursThisWeek,l:DATA.lastSession,t:DATA.tasks}));}catch(e){}}
+(function restore(){try{const s=JSON.parse(localStorage.getItem('jarvis'));
+  if(s && s.d > (DATA.synced||"") && new Date(s.l)>=new Date(DATA.weekStart)){DATA.hoursThisWeek=s.h;DATA.lastSession=s.l;DATA.tasks=s.t;}}catch(e){}})();
+
+/* ---------- speech ---------- */
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+function listenOnce(){
+  if(!SR){say("Voice not supported in this browser. Use the buttons or type.","No mic support here — type or use buttons.");return;}
+  if(rec)rec.abort();
+  rec=new SR();rec.lang='en-US';rec.interimResults=false;
+  document.body.classList.add('listening');stateLabel.textContent="LISTENING…";
+  rec.onresult=e=>handle(e.results[0][0].transcript);
+  rec.onend=()=>{document.body.classList.remove('listening');stateLabel.textContent=wakeOn?'WAKE WORD ACTIVE — SAY "HEY JARVIS"':'TAP THE CORE · OR SAY "HEY JARVIS"';if(wakeOn)startWake();};
+  rec.onerror=rec.onend;
+  try{rec.start();}catch(e){}
+}
+function startWake(){
+  if(!SR||!wakeOn)return;
+  if(wakeRec)wakeRec.abort();
+  wakeRec=new SR();wakeRec.lang='en-US';wakeRec.continuous=true;wakeRec.interimResults=true;
+  wakeRec.onresult=e=>{
+    for(const r of e.results){const txt=r[0].transcript.toLowerCase();
+      if(/\b(hey|ok|okay)?\s*jarvis\b/.test(txt)){
+        wakeRec.abort();
+        const after=txt.split(/jarvis[,:]?\s*/)[1];
+        if(after&&after.trim().length>2){handle("hey jarvis "+after);}
+        else{say("Sir?","<b>Sir?</b>");setTimeout(listenOnce,900);}
+        return;}}
+  };
+  wakeRec.onend=()=>{if(wakeOn&&!document.body.classList.contains('listening'))try{wakeRec.start();}catch(e){}};
+  try{wakeRec.start();stateLabel.textContent='WAKE WORD ACTIVE — SAY "HEY JARVIS"';}catch(e){}
+}
+function toggleWake(){
+  wakeOn=!wakeOn;const b=document.getElementById('wakeBtn');
+  b.textContent="🎙 WAKE WORD: "+(wakeOn?"ON":"OFF");b.classList.toggle('on',wakeOn);
+  if(wakeOn)startWake();else{if(wakeRec)wakeRec.abort();stateLabel.textContent='TAP THE CORE · OR SAY "HEY JARVIS"';}
+}
+document.getElementById('coreWrap').onclick=listenOnce;
+document.getElementById('textIn').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){handle(e.target.value);e.target.value='';}});
+if('speechSynthesis'in window)speechSynthesis.getVoices();
+
+say("Jarvis online. Systems nominal.","<b>JARVIS ONLINE.</b> Say \"Hey Jarvis\" (wake word on), tap the core, or type.\nCommands: <b>status</b> · <b>quiz me</b> · <b>tasks</b>");
+</script>
+</body>
+</html>
