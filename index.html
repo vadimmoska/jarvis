@@ -46,6 +46,16 @@
   .msg.jarvis b{color:var(--cyan)}
   .msg .warn{color:var(--warn)} .msg .bad{color:var(--bad)} .msg .good{color:var(--good)}
 
+  /* ---- Quiz options ---- */
+  .opts{display:flex;flex-direction:column;gap:6px;margin-top:9px;white-space:normal}
+  .opt{text-align:left;font-size:12.5px;letter-spacing:.02em;padding:10px 12px;line-height:1.45;
+    border:1px solid var(--cyan-dim);background:#0d1c27;color:var(--text);border-radius:3px;
+    cursor:pointer;font-family:inherit;width:100%}
+  .opt:active{background:#123043}
+  .opt:disabled{opacity:.5;cursor:default}
+  .opt.correct{border-color:var(--good);color:var(--good);opacity:1;background:#0d2418}
+  .opt.wrong{border-color:var(--bad);color:var(--bad);opacity:1;background:#2a1214}
+
   /* ---- Controls ---- */
   #controls{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;padding-bottom:10px}
   button{background:transparent;border:1px solid var(--cyan-dim);color:var(--cyan);
@@ -75,28 +85,30 @@
   <button id="wakeBtn" onclick="toggleWake()">🎙 WAKE WORD: OFF</button>
 </div>
 <div id="textRow">
-  <input id="textIn" placeholder='type a command… "status" · "quiz me" · "add task …" · "log 2 hours"'>
+  <input id="textIn" placeholder='type a command… "status" · "quiz me" · "when is my exam"'>
 </div>
 <div id="hint">Tap the core, then speak — Mac and iPhone. Optional on Mac (Chrome): WAKE WORD on = hands-free "Hey Jarvis".<br>
-Voice + typed commands: status · quiz me · tasks · add task [x] · done [x] · log [n] hours · stop<br>
+In a quiz: <b>tap an option</b>, or say/type the letter, the number ("option two"), or the answer itself · "repeat" · "skip" · "stop quiz"<br>
+Also understands: status · tasks · when's my exam · how much is left · where am I · add task … · done … · log 2 hours<br>
 <span id="syncStamp" style="color:var(--cyan-dim)"></span></div>
 
 <script src="jarvis-data.js"></script>
 <script>
 /* ============ DATA — fallback snapshot. Live state loads from jarvis-data.js (synced by Claude) ============ */
 const FALLBACK = {
-  examTarget:"week of Aug 24, 2026",
-  floor:12, weeklyNeed:13,
-  weekStart:"2026-07-13",
-  hoursThisWeek:1.7,
-  lastSession:"2026-07-14",
-  courseLeft:55,
+  examTarget:"week of Sep 21, 2026 (push: Sep 7)",
+  floor:8, weeklyNeed:10,
+  weekStart:"2026-07-20",
+  hoursThisWeek:0,
+  lastSession:"2026-07-16",
+  courseLeft:54,
+  position:"Fundamentals L3 Ch2 done — next: L3 Ch3 Group RE Investment Forms",
   tasks:[
-    "Log study hours Wed–Sun — recover the week",
-    "Continue Fundamentals Level 3",
+    "Fri = Anchor #1 (~4 hrs): finish L3 Ch3, into L4",
+    "Sun = Anchor #2 (~4 hrs): push Fundamentals",
+    "Report L3 Ch2 quiz score to Rune",
     "Create PrepAgent account (check email)",
-    "Register PSI student account",
-    "Verify PSI exam fee ($138 vs $210)"
+    "Register PSI student account"
   ],
   quiz:[
     {q:"A fourplex residence is BEST classified as:",a:["Commercial property","Multifamily residential","Industrial property","Mixed-use property"],c:1,why:"1–4 units = residential (multifamily). 5+ units = commercial. This was on your miss list."},
@@ -131,16 +143,28 @@ document.getElementById('syncStamp').textContent = SYNCED
   : "◈ OFFLINE SNAPSHOT — sync via jarvis-data.js or a sync link from Claude";
 
 const log=document.getElementById('log'), stateLabel=document.getElementById('stateLabel');
-let quizState=null, wakeOn=false, rec=null, wakeRec=null;
+let quizState=null, quizLock=false, wakeOn=false, rec=null, wakeRec=null;
 
-function say(text,html){
-  const d=document.createElement('div');d.className='msg jarvis';d.innerHTML=html||text;log.appendChild(d);log.scrollTop=log.scrollHeight;
+function esc(x){return String(x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+/* say(text, html, cb) — cb fires once, after the speech finishes (or after a fallback delay if
+   speech is muted/unsupported). This is what sequences quiz question → answer → next question. */
+function say(text,html,cb){
+  const d=document.createElement('div');d.className='msg jarvis';d.innerHTML=html||esc(text);log.appendChild(d);log.scrollTop=log.scrollHeight;
+  let fired=false; const t0=Date.now();
+  const fire=()=>{if(!fired){fired=true;if(cb)cb();}};
+  /* never advance faster than ~2.2s — if speech is muted/broken, feedback must still be readable */
+  const fireAfterDwell=()=>{setTimeout(fire, Math.max(0, 2200-(Date.now()-t0)));};
   if('speechSynthesis'in window){speechSynthesis.cancel();
     const u=new SpeechSynthesisUtterance(text.replace(/[·—]/g,','));
     u.rate=1.04;u.pitch=0.85;
     const v=speechSynthesis.getVoices().find(v=>/Daniel|UK.*Male|Google UK English Male/i.test(v.name));if(v)u.voice=v;
-    document.body.classList.add('speaking');u.onend=()=>document.body.classList.remove('speaking');
-    speechSynthesis.speak(u);}
+    document.body.classList.add('speaking');
+    u.onend=u.onerror=()=>{document.body.classList.remove('speaking');fireAfterDwell();};
+    speechSynthesis.speak(u);
+    setTimeout(fire, 2400 + text.length*75); /* safety net if onend never fires (muted tab, iOS quirks) */
+  } else setTimeout(fireAfterDwell, 300);
+  return d;
 }
 function you(t){const d=document.createElement('div');d.className='msg you';d.textContent=t;log.appendChild(d);log.scrollTop=log.scrollHeight;}
 
@@ -149,59 +173,159 @@ function daysSince(iso){return Math.floor((Date.now()-new Date(iso+"T12:00:00"))
 function cmdStatus(){
   const gap=daysSince(DATA.lastSession), deficit=Math.max(0,DATA.floor-DATA.hoursThisWeek).toFixed(1);
   const pace = DATA.hoursThisWeek>=DATA.floor ? `<span class="good">${DATA.hoursThisWeek} hrs — floor met.</span>`
-    : `<span class="${DATA.hoursThisWeek<4?'bad':'warn'}">${DATA.hoursThisWeek} hrs of ${DATA.floor} — ${deficit} hrs to recover by Sunday.</span>`;
-  say(`Status brief. Hours this week: ${DATA.hoursThisWeek} of ${DATA.floor}. ${DATA.hoursThisWeek<DATA.floor?deficit+" hours to recover by Sunday.":"Floor met."} Last logged session: ${gap} day${gap==1?"":"s"} ago. Exam target ${DATA.examTarget} holds at ${DATA.weeklyNeed} hours per week. Top priority: ${DATA.tasks[0]}.`,
-  `<b>STATUS BRIEF</b>\nPace: ${pace}\nLast logged session: ${gap} day${gap==1?"":"s"} ago · ~${DATA.courseLeft} course hrs left\nExam target: <b>${DATA.examTarget}</b> — needs ${DATA.weeklyNeed} hrs/wk\nTop priority: ${DATA.tasks[0]}\n\nWhat are we doing, sir?`);
+    : `<span class="${DATA.hoursThisWeek<3?'bad':'warn'}">${DATA.hoursThisWeek} hrs of ${DATA.floor} — ${deficit} hrs to go this week.</span>`;
+  say(`Status brief. Hours this week: ${DATA.hoursThisWeek} of a ${DATA.floor} hour floor, goal ${DATA.weeklyNeed}. ${DATA.hoursThisWeek<DATA.floor?deficit+" hours still to log.":"Floor met."} Last logged session: ${gap} day${gap==1?"":"s"} ago. Exam target: ${DATA.examTarget}. Top priority: ${DATA.tasks[0]}.`,
+  `<b>STATUS BRIEF</b>\nPace: ${pace} (goal ${DATA.weeklyNeed})\nLast logged session: ${gap} day${gap==1?"":"s"} ago · ~${DATA.courseLeft} course hrs left\nExam target: <b>${esc(DATA.examTarget)}</b>\nTop priority: ${esc(DATA.tasks[0])}\n\nWhat are we doing, sir?`);
 }
 function cmdTasks(){
   say(`Open items: ${DATA.tasks.slice(0,3).join(". Next: ")}.`,
-  `<b>OPEN TASKS</b>\n${DATA.tasks.map((t,i)=>(i+1)+". "+t).join("\n")}`);
+  `<b>OPEN TASKS</b>\n${DATA.tasks.map((t,i)=>(i+1)+". "+esc(t)).join("\n")}`);
 }
+function cmdExam(){
+  say(`Exam target: ${DATA.examTarget}. Holding it costs ${DATA.floor} to ${DATA.weeklyNeed} hours a week — about ${DATA.courseLeft} course hours stand between you and test day.`,
+  `<b>EXAM TARGET:</b> ${esc(DATA.examTarget)}\nCost of holding it: ${DATA.floor}–${DATA.weeklyNeed} hrs/wk · ~${DATA.courseLeft} course hrs remain`);
+}
+function cmdPosition(){
+  say(`Position: ${DATA.position||"mid-course"}. About ${DATA.courseLeft} course hours left. This week: ${DATA.hoursThisWeek} of ${DATA.floor}.`,
+  `<b>POSITION</b>\n${esc(DATA.position||"—")}\n~${DATA.courseLeft} course hrs left · this week ${DATA.hoursThisWeek}/${DATA.floor}`);
+}
+function cmdHelp(){
+  say("At your service. I can run a status brief, quiz you, read tasks, add or clear tasks, log hours, and answer questions about your exam target, pace, and position.",
+  `<b>WHAT I UNDERSTAND</b>\n· status / how am I doing\n· quiz me / drill me\n· tasks / what's next\n· when's my exam · how much is left · where am I\n· add task … · done … · log 2 hours\nIn a quiz: tap an option, or say A–D, "option two", or the answer itself · repeat · skip · stop quiz`);
+}
+
+/* ---------- quiz ---------- */
+let quizRun=0;
 function cmdQuiz(){
-  quizState={order:[...DATA.quiz.keys()].sort(()=>Math.random()-.5).slice(0,8),i:0,score:0,missed:[]};
-  say("Quiz mode. Eight questions from your covered chapters, weighted to your weak spots. Commit before you answer.","<b>QUIZ MODE</b> — 8 questions. Answer A, B, C, or D.");
-  askNext();
+  quizState={run:++quizRun,order:[...DATA.quiz.keys()].sort(()=>Math.random()-.5).slice(0,8),i:0,score:0,missed:[]};
+  quizLock=false;
+  say("Quiz mode. Eight questions. Tap an option, or say the letter, the number, or the answer itself.",
+  `<b>QUIZ MODE</b> — 8 questions. Tap an option or say <b>A–D</b> / "option two" / the answer itself.\n"repeat" · "skip" · "stop quiz"`, askNext);
 }
 function askNext(){
-  if(quizState.i>=quizState.order.length){
-    const s=quizState.score,n=quizState.order.length;
-    let m=quizState.missed.length?`\nMissed concepts — add to your miss list:\n• ${quizState.missed.join("\n• ")}`:"\nNothing missed. Log it.";
-    say(`Quiz complete. ${s} of ${n}. ${s/n>=0.85?"Above the 85 percent readiness bar.":"Below the 85 percent readiness bar. The miss list is the syllabus."}`,
-    `<b>RESULT: ${s}/${n}</b> (${Math.round(s/n*100)}%) — readiness bar is 85%${m}`);
-    quizState=null;return;
-  }
-  const q=DATA.quiz[quizState.order[quizState.i]];
+  if(!quizState) return;
+  quizLock=false;
+  if(quizState.i>=quizState.order.length){ endQuiz(false); return; }
+  const q=DATA.quiz[quizState.order[quizState.i]], L="ABCD";
+  const qid=quizState.run+"-"+quizState.i;
+  const opts=q.a.map((t,j)=>`<button class="opt" data-qi="${qid}" data-l="${L[j]}" onclick="answerQuiz('${L[j]}')">${L[j]}) ${esc(t)}</button>`).join("");
   say(`Question ${quizState.i+1}. ${q.q} A: ${q.a[0]}. B: ${q.a[1]}. C: ${q.a[2]}. D: ${q.a[3]}.`,
-  `<b>Q${quizState.i+1}.</b> ${q.q}\nA) ${q.a[0]}\nB) ${q.a[1]}\nC) ${q.a[2]}\nD) ${q.a[3]}`);
+  `<b>Q${quizState.i+1}/${quizState.order.length}.</b> ${esc(q.q)}<div class="opts">${opts}</div>`);
+}
+function markOptions(qid,picked,correct){
+  document.querySelectorAll('.opt[data-qi="'+qid+'"]').forEach(b=>{b.disabled=true;b.onclick=null;
+    if(b.dataset.l===correct)b.classList.add('correct');
+    else if(picked && b.dataset.l===picked)b.classList.add('wrong');});
 }
 function answerQuiz(letter){
-  const q=DATA.quiz[quizState.order[quizState.i]], pick="ABCD".indexOf(letter);
-  if(pick===q.c){quizState.score++;say(`Correct. ${q.why}`,`<span class="good">✔ Correct.</span> ${q.why}`);}
-  else{quizState.missed.push(q.q);say(`Incorrect. The answer is ${"ABCD"[q.c]}: ${q.a[q.c]}. ${q.why}`,`<span class="bad">✘ ${letter} is wrong.</span> Answer: <b>${"ABCD"[q.c]}) ${q.a[q.c]}</b>. ${q.why}`);}
-  quizState.i++;setTimeout(askNext,2600);
+  if(!quizState||quizLock)return;
+  quizLock=true;
+  const qi=quizState.i, q=DATA.quiz[quizState.order[qi]], pick="ABCD".indexOf(letter), corr="ABCD"[q.c];
+  markOptions(quizState.run+"-"+qi, letter, corr);
+  const advance=()=>{if(quizState){quizState.i++;askNext();}};
+  if(pick===q.c){quizState.score++;
+    say(`Correct. ${q.why}`,`<span class="good">✔ Correct — ${quizState.score}/${qi+1} so far.</span> ${esc(q.why)}`,advance);}
+  else{quizState.missed.push(q.q);
+    say(`Not quite. The answer is ${corr}: ${q.a[q.c]}. ${q.why}`,
+    `<span class="bad">✘ ${letter} is wrong.</span> Answer: <b>${corr}) ${esc(q.a[q.c])}</b>. ${esc(q.why)}`,advance);}
+}
+function skipQuestion(){
+  if(!quizState||quizLock)return;
+  quizLock=true;
+  const qi=quizState.i, q=DATA.quiz[quizState.order[qi]], corr="ABCD"[q.c];
+  quizState.missed.push(q.q);
+  markOptions(quizState.run+"-"+qi, null, corr);
+  say(`Skipped. The answer was ${corr}: ${q.a[q.c]}. ${q.why}`,
+  `<span class="warn">→ Skipped.</span> Answer: <b>${corr}) ${esc(q.a[q.c])}</b>. ${esc(q.why)}`,
+  ()=>{if(quizState){quizState.i++;askNext();}});
+}
+function endQuiz(early){
+  const s=quizState.score, n=early?quizState.i:quizState.order.length;
+  if(early && n===0){quizState=null;say("Quiz ended.","Quiz ended.");return;}
+  const m=quizState.missed.length?`\nMissed concepts — add to your miss list:\n• ${quizState.missed.map(esc).join("\n• ")}`:"\nNothing missed. Log it.";
+  say(`Quiz ${early?"stopped":"complete"}. ${s} of ${n}. ${n&&s/n>=0.85?"Above the 85 percent readiness bar.":"Below the 85 percent readiness bar. The miss list is the syllabus."} Say quiz me to run it again.`,
+  `<b>RESULT: ${s}/${n}</b> (${n?Math.round(s/n*100):0}%) — readiness bar is 85%${m}\nSay <b>quiz me</b> to go again.`);
+  quizState=null;quizLock=false;
+}
+
+/* Voice/text → answer. Handles letters, homophones ("bee","see","dee"), numbers & ordinals
+   ("2","option two","the third one"), phrases ("the answer is b"), or the answer text itself. */
+const LETTERMAP={a:"A",hey:"A",eh:"A",ay:"A",aye:"A",b:"B",be:"B",bee:"B",c:"C",see:"C",sea:"C",si:"C",d:"D",de:"D",dee:"D",the:"D",
+  "1":"A",one:"A",won:"A","2":"B",two:"B",to:"B",too:"B","3":"C",three:"C","4":"D",four:"D",for:"D",fore:"D",
+  first:"A",second:"B",third:"C",fourth:"D",last:"D"};
+const STRONGTOK={b:"B",bee:"B",c:"C",see:"C",d:"D",dee:"D",one:"A",two:"B",three:"C",four:"D",
+  first:"A",second:"B",third:"C",fourth:"D"};
+function parseQuizAnswer(s,q){
+  const t=s.toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
+  if(!t)return null;
+  /* 1 — the whole utterance is one answer token: "b", "see", "2", "third", even "hey"/"to"/"for" */
+  if(t!=="the" && LETTERMAP[t]) return LETTERMAP[t];
+  /* 2 — lead-in phrases: "the answer is b", "i'll go with c", "option 2", "letter d", "number three" */
+  let m=t.match(/(?:answer|option|letter|choice|number|pick|go with|choose|say|think(?: it s| its)?|probably|is)\s+(?:is\s+)?([a-z0-9]+)/);
+  if(m && m[1]!=="the" && LETTERMAP[m[1]]) return LETTERMAP[m[1]];
+  /* 3 — ordinals win outright ("the second one"), then unambiguous tokens anywhere ("maybe c") */
+  const ORD={first:"A",second:"B",third:"C",fourth:"D"};
+  const ords=t.split(' ').filter(w=>ORD[w]);
+  if(ords.length===1) return ORD[ords[0]];
+  const found=new Set();
+  t.split(' ').forEach(w=>{if(STRONGTOK[w])found.add(STRONGTOK[w]);});
+  if(found.size===1) return [...found][0];
+  /* 4 — he said the answer text itself: fuzzy-match against the four options */
+  if(q){
+    const stop=new Set(['the','a','an','of','in','is','are','to','and','or','for','on','with','that','it','its','one','property']);
+    const words=x=>x.toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(w=>w&&!stop.has(w));
+    const tw=new Set(words(t)); if(!tw.size)return null;
+    let bi=-1,bs=0,ss=0;
+    q.a.forEach((opt,j)=>{const ow=words(opt);if(!ow.length)return;
+      let hit=0;ow.forEach(w=>{if(tw.has(w))hit++;});
+      const sc=hit/ow.length;
+      if(sc>bs){ss=bs;bs=sc;bi=j;}else if(sc>ss){ss=sc;}});
+    if(bi>-1 && bs>=0.5 && bs>ss) return "ABCD"[bi];
+  }
+  return null;
 }
 
 /* ---------- parser ---------- */
 function handle(raw){
   const t=raw.trim(); if(!t)return; you(t);
-  const s=t.toLowerCase().replace(/^(hey |ok |okay )?jarvis[,:]?\s*/,"");
-  if(quizState && /^[abcd]\b/.test(s)){answerQuiz(s[0].toUpperCase());return;}
-  if(quizState && /^(stop|quit|end|never mind)/.test(s)){quizState=null;say("Quiz ended.","Quiz ended.");return;}
-  if(/status|brief|where (are|am)|check.?in|pace/.test(s)) return cmdStatus();
-  if(/quiz|drill|test me/.test(s)) return cmdQuiz();
-  if(/^(tasks|list|what.?s (on|next)|to.?do)/.test(s)) return cmdTasks();
+  const s=t.toLowerCase().replace(/^(hey |ok |okay )?jarvis[,:]?\s*/,"").trim();
+  const clean=s.replace(/[^a-z0-9\s']/g,'').trim();
+
+  if(quizState){
+    if(/\b(stop|quit|end|exit|cancel)\b.*\bquiz\b|\bquiz\b.*\b(stop|quit|end)\b|^(stop|quit|exit|cancel|never ?mind|i'?m done)$/.test(clean)){endQuiz(true);return;}
+    if(/repeat|say (that |it )?again|one more time|read (that|it)/.test(clean)){if(!quizLock)askNext();return;}
+    if(/^(skip|next|pass)\b|^i? ?(don'?t|dont) know|^no (idea|clue)|^dunno/.test(clean)){skipQuestion();return;}
+    const ans=parseQuizAnswer(s, DATA.quiz[quizState.order[quizState.i]]);
+    if(ans){answerQuiz(ans);return;}
+    if(!/status|task|hello|help/.test(clean)){
+      say("Didn't catch an answer. Tap an option, or say A, B, C, or D — or the answer itself. Repeat, skip, and stop quiz also work.",
+      `Didn't catch an answer. Tap an option, or say <b>A–D</b> / "option two" / the answer itself.\n"repeat" · "skip" · "stop quiz"`);return;}
+  }
+
+  if(/\b(status|brief|check.?in|pace)\b|where (are|am) (we|i)( at)?$|how (am i|are we) (doing|looking)|am i (behind|on track)/.test(clean)) return cmdStatus();
+  if(/\b(quiz|drill|test me|practice|question me)\b/.test(clean)) return cmdQuiz();
+  if(/^(tasks?|list|to.?do)\b|what('?s| is) (on|next|left to do)|what (do|should) i (do|work on)/.test(clean)) return cmdTasks();
+  if(/\bexam\b.*\b(when|date|target|day)\b|\b(when|date)\b.*\bexam\b|when.*\btest\b|test date/.test(clean)) return cmdExam();
+  if(/(how (much|many)|hours?).*(left|remain|to go)|course left|left in the course|far (from|to) (done|the end)/.test(clean)) return cmdPosition();
+  if(/where am i in|position|how far|progress|what level|what chapter/.test(clean)) return cmdPosition();
+  if(/\b(floor|goal)\b|hours (a|per) week|weekly (hours|target)/.test(clean)) {
+    say(`Floor is ${DATA.floor} hours a week — two long sessions. Goal is ${DATA.weeklyNeed}. More is better.`,
+    `<b>Floor:</b> ${DATA.floor} hrs/wk (2 long sessions) · <b>Goal:</b> ${DATA.weeklyNeed} · more is better`);return;}
+  if(/\bhelp\b|what can (you|i)|commands|how do (you|i) work/.test(clean)) return cmdHelp();
   const add=s.match(/^(add task|add|remind me to|note)\s+(.+)/);
-  if(add){DATA.tasks.push(add[2]);persist();say(`Noted: ${add[2]}. Tell me in chat so it lands in TASKS dot MD.`,`Added: <b>${add[2]}</b>\n<span class="warn">Local only — tell Jarvis in a Claude chat to write it into TASKS.md.</span>`);return;}
+  if(add){DATA.tasks.push(add[2]);persist();say(`Noted: ${add[2]}. Tell me in chat so it lands in TASKS dot MD.`,`Added: <b>${esc(add[2])}</b>\n<span class="warn">Local only — tell Jarvis in a Claude chat to write it into TASKS.md.</span>`);return;}
   const done=s.match(/^(done|complete|finished)\s+(.+)/);
   if(done){const i=DATA.tasks.findIndex(x=>x.toLowerCase().includes(done[2]));
-    if(i>-1){say(`Cleared: ${DATA.tasks[i]}.`,`Cleared: <s>${DATA.tasks[i]}</s>`);DATA.tasks.splice(i,1);persist();}
+    if(i>-1){say(`Cleared: ${DATA.tasks[i]}.`,`Cleared: <s>${esc(DATA.tasks[i])}</s>`);DATA.tasks.splice(i,1);persist();}
     else say("No matching task.","No matching task."); return;}
   const hrs=s.match(/log\s+([\d.]+)\s*(hour|hr)/);
   if(hrs){DATA.hoursThisWeek=+(DATA.hoursThisWeek+parseFloat(hrs[1])).toFixed(1);DATA.lastSession=new Date().toISOString().slice(0,10);persist();
     say(`Logged ${hrs[1]} hours. Week total: ${DATA.hoursThisWeek}. Log the detail in a Claude chat so PROGRESS dot MD stays the source of truth.`,
     `Logged <b>${hrs[1]} hrs</b> → week total ${DATA.hoursThisWeek}/${DATA.floor}\n<span class="warn">Log the session detail with Jarvis in chat → PROGRESS.md.</span>`);return;}
-  if(/hello|you there|good (morning|evening)/.test(s)){say("At your service, sir. Status, quiz, or tasks.","At your service, sir. <b>status</b> · <b>quiz</b> · <b>tasks</b>");return;}
-  say("Didn't catch that. Try: status, quiz me, tasks, add task, or log hours.","Commands: <b>status</b> · <b>quiz me</b> · <b>tasks</b> · <b>add task …</b> · <b>done …</b> · <b>log 2 hours</b>");
+  if(/hello|hi jarvis|you (there|up)|good (morning|evening|afternoon)/.test(clean)){say("At your service, sir. Status, quiz, or tasks.","At your service, sir. <b>status</b> · <b>quiz</b> · <b>tasks</b> · <b>help</b>");return;}
+  if(/thank/.test(clean)){say("Sir.","Sir.");return;}
+  say("Didn't catch that. Say help to hear everything I understand — or try status, quiz me, or tasks.",
+  `Didn't catch that. Say <b>help</b> for everything I understand.\nQuick ones: <b>status</b> · <b>quiz me</b> · <b>tasks</b> · <b>when's my exam</b> · <b>log 2 hours</b>`);
 }
 function persist(){try{localStorage.setItem('jarvis',JSON.stringify({d:new Date().toISOString().slice(0,10),h:DATA.hoursThisWeek,l:DATA.lastSession,t:DATA.tasks}));}catch(e){}}
 (function restore(){try{const s=JSON.parse(localStorage.getItem('jarvis'));
@@ -210,7 +334,7 @@ function persist(){try{localStorage.setItem('jarvis',JSON.stringify({d:new Date(
 /* ---------- speech ---------- */
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 function listenOnce(){
-  if(!SR){say("Voice not supported in this browser. Use the buttons or type.","No mic support here — type or use buttons.");return;}
+  if(!SR){say("Voice not supported in this browser. Use the buttons or type.","No mic support here — type or use buttons. (In a quiz you can just tap the options.)");return;}
   if(rec)rec.abort();
   rec=new SR();rec.lang='en-US';rec.interimResults=false;
   document.body.classList.add('listening');stateLabel.textContent="LISTENING…";
@@ -245,7 +369,7 @@ document.getElementById('textIn').addEventListener('keydown',e=>{
   if(e.key==='Enter'){handle(e.target.value);e.target.value='';}});
 if('speechSynthesis'in window)speechSynthesis.getVoices();
 
-say("Jarvis online. Systems nominal.","<b>JARVIS ONLINE.</b> Say \"Hey Jarvis\" (wake word on), tap the core, or type.\nCommands: <b>status</b> · <b>quiz me</b> · <b>tasks</b>");
+say("Jarvis online. Systems nominal.","<b>JARVIS ONLINE.</b> Say \"Hey Jarvis\" (wake word on), tap the core, or type.\nCommands: <b>status</b> · <b>quiz me</b> · <b>tasks</b> · <b>help</b>");
 </script>
 </body>
 </html>
