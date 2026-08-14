@@ -1,6 +1,6 @@
 /* JARVIS service worker — makes the PWA work with ZERO connection (planes, Bali dead zones).
    Bump CACHE on every deploy so the phone picks up new code + a new deck. */
-const CACHE = 'jarvis-v4-2026-08-14';
+const CACHE = 'jarvis-v4-2026-08-14b';
 const ASSETS = ['./', './index.html', './jarvis-data.js', './manifest.json', './icon-180.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

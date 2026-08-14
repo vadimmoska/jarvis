@@ -315,7 +315,7 @@
       <i style="height:30%"></i><i style="height:64%"></i><i style="height:24%"></i><i style="height:44%"></i>
       <i style="height:12%"></i><i style="height:56%"></i><i style="height:34%"></i><i style="height:70%"></i>
     </div>
-    <div class="sub">FLOOR 8H · GOAL 10H</div>
+    <div class="sub" id="floorLabel">—</div>
   </div>
   <div class="mod"><h4>SIGNAL // AUDIO</h4>
     <svg id="scopeSvg" width="100%" height="34" viewBox="0 0 132 34" preserveAspectRatio="none">
@@ -331,17 +331,18 @@
   </div>
   <div class="mod"><h4>MODULES // 90H</h4>
     <div class="modlist">
-      <b>FUND L1</b> <span class="on">■ CLEAR</span><br>
-      <b>FUND L2</b> <span class="on">■ CLEAR</span><br>
-      <b>FUND L3</b> <span class="run">▶ ACTIVE</span><br>
+      <b>FUND L1-L3</b> <span class="on">■ CLEAR</span><br>
+      <b>FUND L4</b> <span class="run">▶ CH3 NEXT</span><br>
       <b>PRACTICES</b> <span class="off">□ QUEUED</span><br>
+      <b>COURSE FINALS</b> <span class="off">□ LOCKED</span><br>
       <b>PSI EXAM</b> <span class="off">□ LOCKED</span>
     </div>
   </div>
   <div class="mod"><h4>PROTOCOL</h4>
     <div class="modlist">
-      <b>2 SESSIONS</b> / WK MIN<br>
-      <b>0 GAPS</b> FULL-WEEK<br>
+      <b>DRILL DAILY</b> TIL SEP 4<br>
+      <b>4.6 H/DAY</b> ON TRIP<br>
+      <b>NO NEW</b> AFTER 10PM<br>
       <b>MISS LIST</b> ALWAYS
     </div>
   </div>
@@ -454,6 +455,8 @@ document.getElementById('syncStamp').textContent = SYNCED
   if(td){var m=String(DATA.examTarget||'').match(/([A-Za-z]{3,9})\s+(\d{1,2}),?\s*(\d{4})/);
     if(m){var d=Math.ceil((new Date(m[1]+' '+m[2]+', '+m[3])-Date.now())/864e5); td.textContent=(d>0?d:0)+' DAYS OUT';}
     else td.textContent='—';}
+  var fl=document.getElementById('floorLabel');
+  if(fl)fl.textContent='FLOOR '+DATA.floor+'H · GOAL '+DATA.weeklyNeed+'H';
   var dr=document.getElementById('dateRuler');
   if(dr){var now=new Date(), dim=new Date(now.getFullYear(),now.getMonth()+1,0).getDate(), tdy=now.getDate(), h='';
     for(var i=1;i<=dim;i++){h+='<span class="dd'+(i===tdy?' on':'')+'">'+(i<10?'0'+i:i)+'</span>';}
