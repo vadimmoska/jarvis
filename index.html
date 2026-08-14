@@ -237,6 +237,8 @@
     box-shadow:0 0 22px rgba(255,109,109,.22)}
 
   /* controls */
+  .cardbtn2{font-weight:600;letter-spacing:.4px}
+  .opt.cardbtn2.correct{color:var(--good)} .opt.cardbtn2.wrong{color:var(--bad)}
   #controls{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;padding-bottom:12px;z-index:1}
   button{color:var(--tlb);font-family:inherit;font-size:11px;font-weight:700;letter-spacing:.18em;
     padding:12px 18px;cursor:pointer;border-radius:3px;
@@ -371,6 +373,7 @@
 <div id="controls">
   <button onclick="cmdStatus()">STATUS</button>
   <button onclick="cmdQuiz()">QUIZ ME</button>
+  <button onclick="cmdCards()">FLASHCARDS</button>
   <button onclick="cmdTasks()">TASKS</button>
   <button id="wakeBtn" onclick="toggleWake()">🎙 WAKE WORD: OFF</button>
 </div>
@@ -507,8 +510,8 @@ function cmdPosition(){
   `<b>POSITION</b>\n${esc(DATA.position||"—")}\n~${DATA.courseLeft} course hrs left · this week ${DATA.hoursThisWeek}/${DATA.floor}`);
 }
 function cmdHelp(){
-  say("At your service. I can run a status brief, quiz you, define any course term, read tasks, add or clear tasks, log hours, and answer questions about your exam target, pace, and position.",
-  `<b>WHAT I UNDERSTAND</b>\n· status / how am I doing\n· quiz me / drill me\n· <b>what is [term]</b> · explain [term] · glossary\n· tasks / what's next\n· when's my exam · how much is left · where am I\n· add task … · done … · log 2 hours\nIn a quiz: tap an option, or say A–D, "option two", or the answer itself · repeat · skip · stop quiz`);
+  say("At your service. I can run a status brief, quiz you, run flashcards on any chapter, define any course term, read tasks, add or clear tasks, log hours, and answer questions about your exam target, pace, and position.",
+  `<b>WHAT I UNDERSTAND</b>\n· status / how am I doing\n· quiz me / drill me\n· <b>flashcards</b> · flashcards L4 · flashcards water rights\n· <b>what is [term]</b> · explain [term] · glossary\n· tasks / what's next\n· when's my exam · how much is left · where am I\n· add task … · done … · log 2 hours\nIn a quiz: tap an option, or say A–D, "option two", or the answer itself · repeat · skip · stop quiz`);
 }
 
 /* ---------- quiz ---------- */
@@ -603,6 +606,99 @@ function parseQuizAnswer(s,q){
 }
 
 
+/* ---------- flashcards (retention mode — works fully offline) ---------- */
+/* Deck lives in DATA.cards: {f:front, b:back, t:tag, w:weight(2 = came from a real miss)}.
+   Per-card history is kept in localStorage so weak cards keep resurfacing. */
+let cardState=null, cardRun=0;
+function cardKey(c){let h=0,s=c.f;for(let i=0;i<s.length;i++){h=(h*31+s.charCodeAt(i))|0;}return "c"+h;}
+function cardStore(){try{return JSON.parse(localStorage.getItem('jarvis_cards'))||{};}catch(e){return {};}}
+function cardSave(st){try{localStorage.setItem('jarvis_cards',JSON.stringify(st));}catch(e){}}
+function cardMark(c,ok){const st=cardStore(),k=cardKey(c),e=st[k]||{m:0,s:0};
+  e.s++; if(ok){e.m=Math.max(0,e.m-1);}else{e.m=Math.min(9,e.m+2);} e.d=new Date().toISOString().slice(0,10);
+  st[k]=e; cardSave(st);}
+function cardScore(c){const e=cardStore()[cardKey(c)]||{m:0,s:0};
+  return (e.m*10) + ((c.w||1)>1?3:0) - Math.min(e.s,6)*0.8 + Math.random()*4;}
+function cardFilter(term){
+  if(!term) return DATA.cards.map((c,i)=>i);
+  const t=term.toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
+  if(!t) return DATA.cards.map((c,i)=>i);
+  const tagHit=DATA.cards.map((c,i)=>[c,i]).filter(([c])=>(c.t||"").toLowerCase().replace(/\s+/g,'').includes(t.replace(/\s+/g,'')));
+  if(tagHit.length) return tagHit.map(([,i])=>i);
+  const words=t.split(' ').filter(w=>w.length>2);
+  if(!words.length) return [];
+  const scored=DATA.cards.map((c,i)=>{const hay=(c.f+" "+c.b+" "+(c.t||"")).toLowerCase();
+    let h=0;words.forEach(w=>{const sg=w.replace(/(ies|es|s)$/,m=>m==='ies'?'y':'');
+      if(hay.indexOf(w)>-1||(sg.length>2&&hay.indexOf(sg)>-1))h++;});return {i,h};}).filter(x=>x.h>0);
+  scored.sort((a,b)=>b.h-a.h);
+  return scored.map(x=>x.i);
+}
+function cmdCards(term,size){
+  if(!DATA.cards||!DATA.cards.length){say("No flashcard deck loaded yet.","<b>No flashcard deck loaded.</b>");return;}
+  if(quizState){quizState=null;quizLock=false;}
+  const pool=cardFilter(term);
+  if(!pool.length){say("No cards match that. Say flashcards on their own for the whole deck.",`<b>No cards match "${esc(term||"")}".</b>\nTry: <b>flashcards</b> · <b>flashcards L4</b> · <b>flashcards water rights</b>`);return;}
+  const n=Math.min(size||12,pool.length);
+  const order=pool.slice().sort((a,b)=>cardScore(DATA.cards[b])-cardScore(DATA.cards[a])).slice(0,n);
+  const weak=order.filter(i=>(DATA.cards[i].w||1)>1).length;
+  cardState={run:++cardRun,order,i:0,shown:false,got:0,missed:[]};
+  say(`Flashcards. ${n} cards${term?" on "+term:""}. ${weak} of them come from questions you actually missed. Say show, then say got it or missed it.`,
+  `<b>FLASHCARDS</b> — ${n} card${n==1?"":"s"}${term?" · filter: <b>"+esc(term)+"</b>":""} · ${weak} from your miss list\nTap <b>SHOW ANSWER</b>, then <b>GOT IT</b> / <b>MISSED IT</b>.\nVoice: "show" · "got it" · "missed" · "skip" · "stop cards"`, renderCard);
+}
+function renderCard(){
+  if(!cardState)return;
+  if(cardState.i>=cardState.order.length){endCards(false);return;}
+  cardState.shown=false;
+  const c=DATA.cards[cardState.order[cardState.i]], cid=cardState.run+"-"+cardState.i;
+  const flag=(c.w||1)>1?' <span class="bad">◆ MISS-LIST</span>':'';
+  say(`Card ${cardState.i+1}. ${c.f}`,
+  `<b>CARD ${cardState.i+1}/${cardState.order.length}</b> <span class="warn">${esc(c.t||"")}</span>${flag}\n<b>${esc(c.f)}</b>\n<span class="warn">Think it through first. Say it out loud before you flip.</span><div class="opts"><button class="opt cardbtn" data-ci="${cid}" onclick="revealCard()">SHOW ANSWER</button><button class="opt cardbtn" data-ci="${cid}" onclick="cardSkip()">SKIP</button></div>`);
+}
+function killCardBtns(cid){document.querySelectorAll('.cardbtn[data-ci="'+cid+'"]').forEach(b=>{b.disabled=true;b.onclick=null;});}
+function revealCard(){
+  if(!cardState||cardState.shown)return;
+  cardState.shown=true;
+  const c=DATA.cards[cardState.order[cardState.i]], cid=cardState.run+"-"+cardState.i;
+  killCardBtns(cid);
+  say(c.b,
+  `<b>ANSWER.</b> ${esc(c.b)}<div class="opts"><button class="opt cardbtn2" data-ci="${cid}" onclick="gradeCard(true)">✔ GOT IT</button><button class="opt cardbtn2" data-ci="${cid}" onclick="gradeCard(false)">✘ MISSED IT</button></div>`);
+}
+function gradeCard(ok){
+  if(!cardState||!cardState.shown)return;
+  const c=DATA.cards[cardState.order[cardState.i]], cid=cardState.run+"-"+cardState.i;
+  document.querySelectorAll('.cardbtn2[data-ci="'+cid+'"]').forEach(b=>{b.disabled=true;b.onclick=null;
+    b.classList.add(ok?'correct':'wrong');});
+  cardMark(c,ok);
+  if(ok)cardState.got++; else cardState.missed.push(c.f);
+  cardState.i++;cardState.shown=false;
+  renderCard();
+}
+function cardSkip(){
+  if(!cardState)return;
+  const c=DATA.cards[cardState.order[cardState.i]], cid=cardState.run+"-"+cardState.i;
+  killCardBtns(cid);
+  cardMark(c,false);
+  cardState.missed.push(c.f);
+  say(`Skipped. ${c.b}`,`<span class="warn">→ Skipped.</span> ${esc(c.b)}`,
+  ()=>{if(cardState){cardState.i++;cardState.shown=false;renderCard();}});
+}
+function endCards(early){
+  if(!cardState)return;
+  const g=cardState.got, n=early?cardState.i:cardState.order.length;
+  if(early&&n===0){cardState=null;say("Flashcards ended.","Flashcards ended.");return;}
+  const pct=n?Math.round(g/n*100):0;
+  const m=cardState.missed.length?`\n<b>Bring these back:</b>\n• ${cardState.missed.slice(0,8).map(esc).join("\n• ")}`:"\nClean run. Those are holding.";
+  say(`Flashcards ${early?"stopped":"done"}. ${g} of ${n}, ${pct} percent. ${pct>=85?"That is retention. Run a different chapter next.":"The ones you missed will come back first next time."}`,
+  `<b>FLASHCARDS: ${g}/${n}</b> (${pct}%)${m}\nMissed cards resurface first next session. Say <b>flashcards</b> to go again, or <b>flashcards L4</b> for one chapter.`);
+  cardState=null;
+}
+function cardChapters(){
+  const tags=[...new Set(DATA.cards.map(c=>c.t))];
+  const st=cardStore();
+  const weak=DATA.cards.filter(c=>(st[cardKey(c)]||{}).m>0).length;
+  say(`I hold ${DATA.cards.length} flashcards across ${tags.length} chapters. ${weak} are flagged weak from your own grading.`,
+  `<b>FLASHCARD DECK — ${DATA.cards.length} CARDS</b>\n${esc(tags.join(" · "))}\n${weak} flagged weak from your grading · ${DATA.cards.filter(c=>(c.w||1)>1).length} built from questions you actually missed\nSay <b>flashcards</b> · <b>flashcards L2 Ch1</b> · <b>flashcards water rights</b>`);
+}
+
 /* ---------- knowledge bank (course glossary — L1..L3 + weak spots) ---------- */
 const KB=[
 {t:"Land",k:["land","real land"],a:"The earth's surface, everything beneath it down to the center, the airspace above, plus natural attachments like trees and water.",d:"Land = surface + subsurface (minerals) + airspace + things nature attached (trees, ponds, native crops). It does NOT include man-made improvements — that is what upgrades it to real estate. Exam trap: land, real estate, and real property are a ladder — land is the narrowest of the three."},
@@ -695,8 +791,30 @@ function handle(raw){
       `Didn't catch an answer. Tap an option, or say <b>A–D</b> / "option two" / the answer itself.\n"repeat" · "skip" · "stop quiz"`);return;}
   }
 
+  if(cardState){
+    var CARDESC=/\b(status|pace|tasks?|to.?do|help|exam|quiz|drill|position|glossary|log)\b/;
+    if(/\b(stop|quit|end|exit|cancel)\b.*\b(cards?|flash ?cards?)\b|\b(cards?|flash ?cards?)\b.*\b(stop|quit|end)\b|^(stop|quit|exit|cancel|never ?mind|i'?m done|enough)$/.test(clean)){endCards(true);return;}
+    if(/^(skip|next|pass)\b|^i? ?(don'?t|dont) know|^no (idea|clue)|^dunno/.test(clean)){if(cardState.shown){gradeCard(false);}else{cardSkip();}return;}
+    if(!cardState.shown){
+      if(/^(show|flip|reveal|answer|show me|show answer|show it|what is it|tell me|give it to me)\b/.test(clean)){revealCard();return;}
+      if(/repeat|say (that |it )?again|read (that|it)/.test(clean)){renderCard();return;}
+      if(CARDESC.test(clean)){cardState=null;}
+      else{say("Say show when you have committed to an answer.",'Say <b>show</b> when you have committed to an answer \u2014 or <b>skip</b>.');return;}
+    } else if(cardState){
+      if(/^(got it|get it|knew it|yes|yep|yeah|correct|right|nailed it|easy|i knew that)\b/.test(clean)){gradeCard(true);return;}
+      if(/^(missed?( it)?|no|nope|wrong|forgot|didn'?t know|blank|nah)\b/.test(clean)){gradeCard(false);return;}
+      if(CARDESC.test(clean)){cardState=null;}
+      else{say("Got it, or missed it?",'Say <b>got it</b> or <b>missed it</b> \u2014 grade yourself honestly, it decides what comes back.');return;}
+    }
+  }
+
   if(lastKB && /^(more|go deeper|deep dive|full( version)?|details?|explain( it| that)?|why)$/.test(clean)){kbAnswer(lastKB,true);return;}
   if(/\b(status|brief|check.?in|pace)\b|where (are|am) (we|i)( at)?$|how (am i|are we) (doing|looking)|am i (behind|on track)/.test(clean)) return cmdStatus();
+  if(/how many (flash ?)?cards|^(what cards|which cards|card list|deck list|card stats|deck)$|whats in (the )?deck/.test(clean)) return cardChapters();
+  if(/^(flash ?cards?|cards?|card deck|deck)$|\b(flash ?cards?)\b|review (my )?cards?|run (me )?(some )?cards?/.test(clean)){
+    var cm=s.match(/(?:flash ?cards?|cards?)\s+(?:on|about|for|from)?\s*(.+)$/i);
+    return cmdCards(cm?cm[1].trim():null);
+  }
   if(/\b(quiz|drill|test me|practice|question me)\b/.test(clean)) return cmdQuiz();
   if(/^(tasks?|list|to.?do)\b|what('?s| is) (on|next|left to do)|what (do|should) i (do|work on)/.test(clean)) return cmdTasks();
   if(/\bexam\b.*\b(when|date|target|day)\b|\b(when|date)\b.*\bexam\b|what('?s| is) my exam\b|when.*\btest\b|test date/.test(clean)) return cmdExam();
@@ -772,6 +890,11 @@ function toggleWake(){
   if(wakeOn)startWake();else{if(wakeRec)wakeRec.abort();stateLabel.textContent='TAP THE CORE · OR SAY "HEY JARVIS"';}
 }
 document.getElementById('coreWrap').onclick=listenOnce;
+/* offline support — registers only when served over http(s) (GitHub Pages / the phone PWA).
+   Opening the file locally (file://) skips it silently. */
+try{ if('serviceWorker' in navigator && location.protocol.indexOf('http')===0){
+  window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){});});
+} }catch(e){}
 document.getElementById('textIn').addEventListener('keydown',e=>{
   if(e.key==='Enter'){handle(e.target.value);e.target.value='';}});
 if('speechSynthesis'in window)speechSynthesis.getVoices();
